@@ -1,8 +1,8 @@
-from amadeus import Client, ResponseError, Location
-from django.views.decorators.csrf import csrf_exempt
-from django.conf import settings
-from django.http import JsonResponse
 import json
+from django.http import JsonResponse
+from django.views.decorators.csrf import csrf_exempt
+from amadeus import Client, ResponseError
+from django.conf import settings
 import uuid
 
 amadeus = Client(
@@ -11,48 +11,8 @@ amadeus = Client(
 )
 
 @csrf_exempt
-def search_destinations(request):
-    if request.method != "POST":
-        return JsonResponse({"error": "POST only"}, status=405)
-
-    try:
-        data = json.loads(request.body)
-    except json.JSONDecodeError:
-        return JsonResponse({"error": "Invalid JSON"}, status=400)
-
-    keyword = data.get("keyword", "").strip()
-    
-    if not keyword or len(keyword) < 1:
-        return JsonResponse({"error": "Keyword required (city name or airport code)"}, status=400)
-
-    try:
-        response = amadeus.reference_data.locations.get(
-            keyword=keyword,
-            subType="AIRPORT,CITY"
-        )
-        
-        locations = response.data if response.data else []
-        
-        formatted_locations = []
-        for location in locations:
-            formatted_locations.append({
-                "iataCode": location.get("iataCode"),
-                "name": location.get("name"),
-                "city": location.get("address", {}).get("cityName"),
-                "countryCode": location.get("address", {}).get("countryCode"),
-                "type": location.get("subType"),
-                "fullName": f"{location.get('name')} ({location.get('iataCode')})" if location.get('iataCode') else location.get('name')
-            })
-        
-        return JsonResponse(formatted_locations, safe=False)
-
-    except ResponseError as error:
-        return JsonResponse({"error": f"API Error: {str(error)}"}, status=400)
-    except Exception as error:
-        return JsonResponse({"error": f"Server Error: {str(error)}"}, status=500)
-
-@csrf_exempt
-def flight_search(request):
+def search_flights(request):
+    """Search for flights based on origin, destination, and dates"""
     if request.method != "POST":
         return JsonResponse({"error": "POST only"}, status=405)
 
@@ -65,7 +25,6 @@ def flight_search(request):
     destination = data.get("destination", "").strip().upper()
     departure_date = data.get("departure_date", "").strip()
     return_date = data.get("return_date") or ""
-    passenger_count = data.get("passenger_count", 1)
     if return_date:
         return_date = return_date.strip()
     trip_type = data.get("trip_type", "oneway")
@@ -82,12 +41,11 @@ def flight_search(request):
 
     try:
         if trip_type == "oneway":
-            # One-way flight search
             response = amadeus.shopping.flight_offers_search.get(
                 originLocationCode=origin,
                 destinationLocationCode=destination,
                 departureDate=departure_date,
-                adults=passenger_count,
+                adults=1,
                 currencyCode="IDR"
             )
             flights = response.data
@@ -95,19 +53,23 @@ def flight_search(request):
                 return JsonResponse([], safe=False)
             return JsonResponse(flights, safe=False)
         else:
+            # For round-trip: Get SEPARATE outbound and return flights
+            # Outbound: origin → destination on departure_date
+            # Return: destination → origin on return_date
             outbound_response = amadeus.shopping.flight_offers_search.get(
                 originLocationCode=origin,
                 destinationLocationCode=destination,
                 departureDate=departure_date,
-                adults=passenger_count,
+                adults=1,
                 currencyCode="IDR"
             )
             
+            # Return flight goes the opposite direction
             return_response = amadeus.shopping.flight_offers_search.get(
                 originLocationCode=destination,
                 destinationLocationCode=origin,
                 departureDate=return_date,
-                adults=passenger_count,
+                adults=1,
                 currencyCode="IDR"
             )
             
@@ -120,6 +82,7 @@ def flight_search(request):
             for flight in return_flights:
                 flight['_leg'] = 'return'
             
+            # Combine them
             all_flights = outbound_flights + return_flights
             
             if not all_flights:
@@ -133,7 +96,9 @@ def flight_search(request):
         return JsonResponse({"error": f"Server Error: {str(error)}"}, status=500)
 
 
-def flight_searchresults(request):
+@csrf_exempt    
+def price_flight(request):
+    """Get pricing for a selected flight"""
     if request.method != "POST":
         return JsonResponse({"error": "POST only"}, status=405)
 
@@ -144,6 +109,7 @@ def flight_searchresults(request):
         if not flight_offer:
             return JsonResponse({"error": "Flight data required"}, status=400)
 
+        # Call Amadeus pricing API
         priced_response = amadeus.shopping.flight_offers.pricing.post(
             body={
                 "data": {
@@ -165,6 +131,7 @@ def flight_searchresults(request):
 
 @csrf_exempt
 def book_flight(request):
+    """Complete the flight booking"""
     if request.method != "POST":
         return JsonResponse({"error": "POST only"}, status=405)
 
@@ -172,9 +139,11 @@ def book_flight(request):
         data = json.loads(request.body)
         passenger = data.get("passenger")
 
+        # Handle both one-way and round-trip
         if not passenger:
             return JsonResponse({"error": "Passenger data required"}, status=400)
 
+        # Check if it's round-trip or one-way
         outbound_flight = data.get("outbound_flight")
         return_flight = data.get("return_flight")
         flight = data.get("flight")
@@ -183,7 +152,7 @@ def book_flight(request):
             return JsonResponse({"error": "Flight data required"}, status=400)
 
         # Validate passenger data
-        required_fields = ["firstName", "lastName", "passportNumber", "email", "phone"]
+        required_fields = ["firstName", "lastName", "email"]
         if not all(passenger.get(field) for field in required_fields):
             return JsonResponse({"error": "Missing passenger information"}, status=400)
 
@@ -227,3 +196,4 @@ def book_flight(request):
         return JsonResponse({"error": "Invalid JSON"}, status=400)
     except Exception as error:
         return JsonResponse({"error": f"Booking Error: {str(error)}"}, status=500)
+
