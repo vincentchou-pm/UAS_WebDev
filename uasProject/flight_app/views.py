@@ -65,6 +65,7 @@ def flight_search(request):
     destination = data.get("destination", "").strip().upper()
     departure_date = data.get("departure_date", "").strip()
     return_date = data.get("return_date") or ""
+    passenger_count = data.get("passenger_count", 1)
     if return_date:
         return_date = return_date.strip()
     trip_type = data.get("trip_type", "oneway")
@@ -86,7 +87,7 @@ def flight_search(request):
                 originLocationCode=origin,
                 destinationLocationCode=destination,
                 departureDate=departure_date,
-                adults=1,
+                adults=passenger_count,
                 currencyCode="IDR"
             )
             flights = response.data
@@ -98,7 +99,7 @@ def flight_search(request):
                 originLocationCode=origin,
                 destinationLocationCode=destination,
                 departureDate=departure_date,
-                adults=1,
+                adults=passenger_count,
                 currencyCode="IDR"
             )
             
@@ -106,7 +107,7 @@ def flight_search(request):
                 originLocationCode=destination,
                 destinationLocationCode=origin,
                 departureDate=return_date,
-                adults=1,
+                adults=passenger_count,
                 currencyCode="IDR"
             )
             
